@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,9 @@ from typing import Any
 
 
 DEFAULT_CACHE_PATH = ".indextts2_cli_cache.json"
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def _default_session() -> dict[str, Any]:
@@ -27,6 +31,7 @@ def _default_session() -> dict[str, Any]:
             "voice_reference_path": "examples/voice_01.wav",
             "input_text_file_path": "",
             "output_basename": "gen",
+            "audition_output_dir": "outputs",
             "emotion_mode": 0,
             "emotion_reference_path": "",
             "emotion_control_weight": 0.65,
@@ -218,6 +223,10 @@ def _collect_inputs(cfg: dict[str, Any], include_model_init: bool = True) -> dic
     inputs["input_text_file_path"] = _prompt_existing_path("Main text file path", inputs["input_text_file_path"])
     output_basename = _prompt_str("Output basename (no extension)", inputs["output_basename"])
     inputs["output_basename"] = Path(output_basename).stem
+    inputs["audition_output_dir"] = _prompt_str(
+        "Audition output directory",
+        inputs.get("audition_output_dir", "outputs"),
+    )
 
     print("Emotion mode: 0=same-as-speaker, 1=emotion-reference-audio, 2=emotion-vector, 3=emotion-text")
     inputs["emotion_mode"] = _prompt_int("Emotion mode", int(inputs["emotion_mode"]), 0, 3)
@@ -291,13 +300,10 @@ def _split_batches(tts: Any, text: str, max_text_tokens_per_segment: int, max_me
     return ["".join(seg).strip() for seg in segments if seg and "".join(seg).strip()]
 
 
-def _sox_play(path: Path) -> None:
-    try:
-        subprocess.run(["play", "-q", str(path)], check=True)
-    except FileNotFoundError:
-        print("SoX player command 'play' was not found. Install SoX to enable audition playback.")
-    except subprocess.CalledProcessError as e:
-        print(f"Audio playback failed (exit={e.returncode}).")
+def _announce_audition_file(path: Path) -> None:
+    logger.info("Audition file ready: %s", path)
+    print(f"Audition file ready: {path}")
+    print("Play this file from your local/NAS-accessible player.")
 
 
 def _build_generation_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -354,14 +360,15 @@ def _infer_once(tts: Any, text: str, out_path: Path, cfg: dict[str, Any]) -> str
 def _audition_loop(tts: Any, cfg: dict[str, Any], cache_path: Path) -> bool:
     inputs = cfg["inputs"]
     base = inputs["output_basename"]
-    audition_path = Path("outputs") / f"{base}_audition.wav"
+    audition_dir = Path(inputs.get("audition_output_dir", "outputs"))
+    audition_path = audition_dir / f"{base}_audition.wav"
 
-    def regenerate_and_play() -> None:
+    def regenerate_file() -> None:
         print("\nGenerating audition sample...")
         _infer_once(tts, inputs["audition_text"], audition_path, cfg)
-        _sox_play(audition_path)
+        _announce_audition_file(audition_path)
 
-    regenerate_and_play()
+    regenerate_file()
 
     while True:
         cmd = input(
@@ -370,16 +377,18 @@ def _audition_loop(tts: Any, cfg: dict[str, Any], cache_path: Path) -> bool:
         if cmd == "":
             return True
         if cmd == "p":
-            _sox_play(audition_path)
+            _announce_audition_file(audition_path)
             continue
         if cmd == "r":
-            regenerate_and_play()
+            regenerate_file()
             continue
         if cmd == "m":
             print("\nModify parameters...")
             _collect_inputs(cfg, include_model_init=False)
             _save_json(cache_path, cfg)
-            regenerate_and_play()
+            audition_dir = Path(inputs.get("audition_output_dir", "outputs"))
+            audition_path = audition_dir / f"{inputs['output_basename']}_audition.wav"
+            regenerate_file()
             continue
         if cmd == "q":
             return False
@@ -392,12 +401,21 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--cache-file", type=str, default=DEFAULT_CACHE_PATH, help="JSON cache file path")
+    parser.add_argument(
+        "--audition-output-dir",
+        type=str,
+        default="",
+        help="Directory where audition files are written (e.g., NAS mount path)",
+    )
     args = parser.parse_args()
 
-    cache_path = Path(args.cache_file)
-    cfg = _load_json(cache_path)
-
     try:
+        cache_path = Path(args.cache_file)
+        cfg = _load_json(cache_path)
+
+        if args.audition_output_dir.strip():
+            cfg["inputs"]["audition_output_dir"] = args.audition_output_dir.strip()
+
         cfg = _collect_inputs(cfg)
         _save_json(cache_path, cfg)
 
@@ -444,6 +462,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("Interrupted by user.")
     except Exception as e:
+        logger.exception("Batch synthesis failed: %s", e)
         print(f"Error: {e}")
         sys.exit(1)
 

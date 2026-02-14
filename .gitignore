@@ -29,3 +29,10 @@ desktop.ini
 /checkpoints/*
 !/checkpoints/*.yaml
 /outputs/
+
+# local data
+*.json
+
+# fork: do not update original README non-English data or markdown
+docs/README_zh.md
+README.md

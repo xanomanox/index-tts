@@ -30,4 +30,12 @@ Thoughts: Weight control has clear affect on output. The variance is really subj
 
 ## 2.1 Batch CLI with Audition
 
+The batch script runs on the Ubuntu host and saves all audio outputs to shared NAS mounts.
+
+Update and sync the application environment after build changes.
+
+``` uv lock ``` 
+``` uv sync ```
+
+To execute:
 ``` uv run indextts2-batch ```
